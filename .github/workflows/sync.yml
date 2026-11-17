@@ -2,7 +2,7 @@ name: sync
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       target:
@@ -16,12 +16,15 @@ concurrency:
 permissions:
   contents: read
   models: read
+  actions: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
+      - name: Start
+        run: echo "STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           repository: ${{ secrets.SRC_REPO }}
@@ -56,3 +59,13 @@ jobs:
         run: |
           case "$TARGET" in staging|production) ;; *) echo "bad target"; exit 1;; esac
           npx tsx src/cli.ts harvest --env "$TARGET" --quiet --minutes 20
+      - name: Next
+        if: ${{ !cancelled() && (github.event.inputs.target || 'production') == 'production' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          wait=$(( STARTED_AT + 1680 - $(date +%s) ))
+          if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+          waiting=$(gh run list --workflow sync.yml --json status -q '[.[] | select(.status=="queued" or .status=="pending" or .status=="waiting" or .status=="requested")] | length')
+          if [ "$waiting" = "0" ]; then gh workflow run sync.yml -f target=production; fi
